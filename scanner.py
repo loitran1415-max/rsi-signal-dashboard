@@ -11,38 +11,56 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
 
-PRIORITY_SYMBOLS = [
+# Danh sach du phong: chi HOSE va HNX, khong co UPCOM
+FALLBACK_SYMBOLS = [
+    # HOSE
     "VIC","VHM","VNM","VCB","BID","CTG","MBB","TCB","VPB","ACB",
     "HPG","HSG","NKG","MSN","VRE","MWG","FPT","SSI","VND","HCM",
-    "VCI","SHS","BSI","CTS","AGR","VDS","GAS","PLX","PVD","PVS",
-    "VJC","HVN","ACV","DHG","IMP","DMC","REE","PPC","POW","NT2",
-    "DGC","DPM","DCM","VOS","GMD","HAH","VSC","PVT","STB","EIB",
-    "TPB","OCB","LPB","NAB","VIB","SSB","VHC","ANV","KDH","NLG",
-    "DXG","PDR","DIG","NTL","HBC","CTD","FCN","C4G","LCG","HHV",
-    "CII","DPG","IJC","SZC","PLC","SHB","NVB","IDC","VGS","PAN",
-    "HAG","HNG","BAF","MSB","PHR","GVR","BCM","SAB","VPG","SIP",
+    "VCI","SHS","BSI","CTS","AGR","GAS","PLX","PVD","PVS","PVC",
+    "VJC","HVN","ACV","SGN","NCT","DHG","IMP","DMC","TRA","DBD",
+    "REE","PPC","POW","NT2","VSH","TBC","DGC","DPM","DCM","CSV",
+    "VOS","GMD","HAH","VSC","PVT","STB","EIB","TPB","OCB","LPB",
+    "NAB","VIB","SSB","VHC","ANV","IDI","KDH","NLG","DXG","PDR",
+    "DIG","NTL","HBC","CTD","FCN","C4G","LCG","HHV","CII","DPG",
+    "IJC","SZC","PHR","GVR","BCM","SAB","MSB","HAG","HNG","BAF",
+    "SBT","QNS","VHG","SRC","DRC","CSM","VCS","TCD","DGW","MWG",
+    # HNX
+    "PLC","PGT","HUT","SHB","NVB","KLF","IDC","VGS","PAN","NSC",
+    "VFG","HNA","PIV","VCS","BCC","SHS","NTP","VCS","CEO","HHS",
+    "PVB","SCI","TNG","VGC","HCD","BVS","MBS","VDS","APS","APG",
+    "PGI","VIF","HLD","NHH","BTS","SDT","HEM","VNR","BKG","AAM",
 ]
 
-def get_all_symbols():
-    use_priority = os.getenv("USE_PRIORITY_ONLY", "false").lower() == "true"
-    if use_priority:
-        logger.info(f"Priority mode: {len(PRIORITY_SYMBOLS)} symbols")
-        return PRIORITY_SYMBOLS
+def get_symbols_hose_hnx():
+    \"\"\"Lay danh sach ma chi HOSE va HNX tu VCI API\"\"\"
     try:
         from vnstock3 import Vnstock
         listing = Vnstock().stock(source='VCI').listing
         df = listing.all_symbols()
-        symbols = df['ticker'].dropna().unique().tolist()
-        logger.info(f"Got {len(symbols)} symbols from VCI")
+        logger.info(f"Tong so ma lay duoc tu VCI: {len(df)}")
+        logger.info(f"Cac san co trong du lieu: {df['exchange'].unique().tolist() if 'exchange' in df.columns else 'khong co cot exchange'}")
+
+        # Loc chi HOSE va HNX
+        if 'exchange' in df.columns:
+            df_filtered = df[df['exchange'].str.upper().isin(['HOSE', 'HNX'])]
+            symbols = df_filtered['ticker'].dropna().unique().tolist()
+            hose_count = len(df[df['exchange'].str.upper() == 'HOSE'])
+            hnx_count  = len(df[df['exchange'].str.upper() == 'HNX'])
+            logger.info(f"HOSE: {hose_count} ma | HNX: {hnx_count} ma | Tong: {len(symbols)} ma")
+        else:
+            # Neu khong co cot exchange, dung toan bo (fallback)
+            symbols = df['ticker'].dropna().unique().tolist()
+            logger.warning("Khong tim thay cot 'exchange', dung toan bo danh sach")
         return symbols
     except Exception as e:
-        logger.warning(f"Fallback to priority list: {e}")
-        return PRIORITY_SYMBOLS
+        logger.warning(f"Loi lay danh sach tu VCI: {e}. Dung fallback list.")
+        logger.info(f"Fallback: {len(FALLBACK_SYMBOLS)} ma HOSE+HNX")
+        return FALLBACK_SYMBOLS
 
 def fetch_ohlcv_1h(symbol):
     try:
         from vnstock3 import Vnstock
-        end_date = datetime.now(VN_TZ).strftime('%Y-%m-%d')
+        end_date   = datetime.now(VN_TZ).strftime('%Y-%m-%d')
         start_date = (datetime.now(VN_TZ) - timedelta(days=90)).strftime('%Y-%m-%d')
         stock = Vnstock().stock(symbol=symbol, source='TCBS')
         df = stock.quote.history(start=start_date, end=end_date, interval='1H')
@@ -58,11 +76,8 @@ def fetch_ohlcv_1h(symbol):
 def compute_indicators(df):
     df = df.copy()
     close = df['close']
-    # RSI(14) dung thu vien ta
-    df['rsi'] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
-    # EMA9 cua RSI
+    df['rsi']      = ta.momentum.RSIIndicator(close=close, window=14).rsi()
     df['rsi_ema9'] = ta.trend.EMAIndicator(close=df['rsi'], window=9).ema_indicator()
-    # WMA45 cua RSI - tinh tay vi ta khong co WMA
     weights = list(range(1, 46))
     w_sum = sum(weights)
     df['rsi_wma45'] = df['rsi'].rolling(window=45).apply(
@@ -75,62 +90,68 @@ def detect_signal(df):
         return None
     prev = df.iloc[-2]
     curr = df.iloc[-1]
-    above_both = (curr['rsi'] > curr['rsi_ema9'] and curr['rsi'] > curr['rsi_wma45'])
+    above_both    = (curr['rsi'] > curr['rsi_ema9'] and curr['rsi'] > curr['rsi_wma45'])
     below_any_prev = (prev['rsi'] <= prev['rsi_ema9'] or prev['rsi'] <= prev['rsi_wma45'])
     if above_both and below_any_prev:
         return {
-            'rsi': round(float(curr['rsi']), 2),
-            'rsi_ema9': round(float(curr['rsi_ema9']), 2),
+            'rsi':       round(float(curr['rsi']), 2),
+            'rsi_ema9':  round(float(curr['rsi_ema9']), 2),
             'rsi_wma45': round(float(curr['rsi_wma45']), 2),
-            'dist_ema9': round(float(curr['rsi'] - curr['rsi_ema9']), 2),
+            'dist_ema9':  round(float(curr['rsi'] - curr['rsi_ema9']), 2),
             'dist_wma45': round(float(curr['rsi'] - curr['rsi_wma45']), 2),
-            'close': round(float(curr.get('close', 0)), 2),
+            'close':  round(float(curr.get('close', 0)), 2),
             'volume': int(curr.get('volume', 0)),
             'candle_time': str(curr.get('time', '')),
         }
     return None
 
 def scan_market():
-    symbols = get_all_symbols()
+    symbols = get_symbols_hose_hnx()
     results = []
     total = len(symbols)
     delay = float(os.getenv("SCAN_DELAY_SECONDS", "0.35"))
-    logger.info(f"Starting scan: {total} symbols...")
+    logger.info(f"Bat dau scan {total} ma HOSE+HNX...")
     for i, symbol in enumerate(symbols, 1):
         try:
             df = fetch_ohlcv_1h(symbol)
             if df is not None:
-                df = compute_indicators(df)
+                df  = compute_indicators(df)
                 sig = detect_signal(df)
                 if sig:
-                    sig['symbol'] = symbol
+                    sig['symbol']      = symbol
                     sig['detected_at'] = datetime.now(VN_TZ).isoformat()
                     results.append(sig)
-                    logger.info(f"  SIGNAL [{i}/{total}] {symbol} RSI={sig['rsi']}")
-            if i % 20 == 0:
-                logger.info(f"  Progress: {i}/{total} ({round(i/total*100)}%)")
+                    logger.info(f"  SIGNAL [{i}/{total}] {symbol} RSI={sig['rsi']} EMA9={sig['rsi_ema9']} WMA45={sig['rsi_wma45']}")
+            if i % 50 == 0:
+                logger.info(f"  Tien do: {i}/{total} ({round(i/total*100)}%)")
             time.sleep(delay)
         except Exception as e:
-            logger.error(f"Error {symbol}: {e}")
-    logger.info(f"Scan done: {len(results)} signals / {total} symbols")
+            logger.error(f"Loi {symbol}: {e}")
+    logger.info(f"Scan xong: {len(results)} tin hieu / {total} ma HOSE+HNX")
     return results
 
 async def send_telegram(signals):
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
-        logger.warning("Telegram not configured.")
+        logger.warning("Chua cau hinh Telegram. Bo qua.")
         return
     try:
         import telegram
         bot = telegram.Bot(token=token)
         now = datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')
         if not signals:
-            msg = f"RSI Scan xong luc {now}. Khong co tin hieu moi."
+            msg = f"RSI Scan xong luc {now} (HOSE+HNX). Khong co tin hieu moi."
         else:
-            lines = [f"RSI Cat len EMA9+WMA45 khung 1H", f"Thoi gian: {now} | {len(signals)} ma", ""]
+            lines = [
+                f"RSI Cat len EMA9+WMA45 - Khung 1H",
+                f"San: HOSE + HNX | {now} | {len(signals)} ma",
+                "",
+            ]
             for s in signals[:25]:
-                lines.append(f"{s['symbol']} | RSI={s['rsi']} EMA9={s['rsi_ema9']} WMA45={s['rsi_wma45']}")
+                lines.append(
+                    f"{s['symbol']} | RSI={s['rsi']} EMA9={s['rsi_ema9']} WMA45={s['rsi_wma45']} Gia={s['close']:,.0f}"
+                )
             if len(signals) > 25:
                 lines.append(f"...va {len(signals)-25} ma khac")
             msg = "\n".join(lines)
@@ -140,19 +161,23 @@ async def send_telegram(signals):
         logger.error(f"Telegram error: {e}")
 
 def main():
-    logger.info("=" * 50)
-    logger.info("RSI Signal Scanner - TTCK Viet Nam")
-    logger.info(f"Time: {datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')}")
-    logger.info("=" * 50)
+    logger.info("=" * 55)
+    logger.info("RSI Signal Scanner - HOSE + HNX")
+    logger.info(f"Thoi gian: {datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')}")
+    logger.info("=" * 55)
     signals = scan_market()
     if signals:
-        logger.info(f"RESULT - {len(signals)} SIGNALS:")
+        logger.info(f"KET QUA: {len(signals)} TIN HIEU")
         for s in signals:
-            logger.info(f"  {s['symbol']:6s} RSI={s['rsi']:5.1f} EMA9={s['rsi_ema9']:5.1f} WMA45={s['rsi_wma45']:5.1f} Price={s['close']:,.0f}")
+            logger.info(
+                f"  {s['symbol']:6s} | RSI={s['rsi']:5.1f} "
+                f"EMA9={s['rsi_ema9']:5.1f} WMA45={s['rsi_wma45']:5.1f} "
+                f"Gia={s['close']:,.0f}"
+            )
     else:
-        logger.info("No signals found.")
+        logger.info("Khong co tin hieu nao.")
     asyncio.run(send_telegram(signals))
-    logger.info("Done.")
+    logger.info("Hoan tat.")
 
 if __name__ == "__main__":
     main()
