@@ -1,9 +1,9 @@
-name: RSI Signal Scanner - TTCK Viet Nam
+name: RSI Signal Scanner - HOSE + HNX
 
 on:
-  # Chay tu dong theo lich (UTC+7 = UTC-7h)
-  # 9:05 ICT = 2:05 UTC | 10:05=3:05 | 11:05=4:05 | 11:35=4:35
-  # 13:05=6:05 | 14:05=7:05 | 15:05=8:05 (Thu 2 - Thu 6)
+  # Lich chay tu dong (ICT = UTC+7)
+  # 9:05 ICT=2:05UTC | 10:05=3:05 | 11:05=4:05 | 11:35=4:35
+  # 13:05=6:05 | 14:05=7:05 | 15:05=8:05  (Thu 2 - Thu 6)
   schedule:
     - cron: '5 2 * * 1-5'   # 09:05 ICT
     - cron: '5 3 * * 1-5'   # 10:05 ICT
@@ -14,19 +14,10 @@ on:
     - cron: '5 8 * * 1-5'   # 15:05 ICT
   # Cho phep chay thu cong
   workflow_dispatch:
-    inputs:
-      use_priority_only:
-        description: 'Chi scan ma uu tien (nhanh hon)'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
 
 jobs:
   scan:
-    name: Scan RSI Signals
+    name: Scan RSI Signals - HOSE + HNX
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -45,26 +36,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run RSI Scanner
+      - name: Run RSI Scanner (HOSE + HNX)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          USE_PRIORITY_ONLY: ${{ github.event.inputs.use_priority_only || 'false' }}
           SCAN_DELAY_SECONDS: '0.35'
         run: |
-          echo "======================================"
-          echo "RSI Signal Scanner - TTCK Viet Nam"
-          echo "Time (UTC): $(date -u)"
-          echo "Time (ICT): $(TZ='Asia/Ho_Chi_Minh' date)"
-          echo "======================================"
+          echo "======================================================"
+          echo "  RSI Signal Scanner - San HOSE + HNX"
+          echo "  Time UTC : $(date -u)"
+          echo "  Time ICT : $(TZ='Asia/Ho_Chi_Minh' date)"
+          echo "======================================================"
           python scanner.py
 
-      - name: Upload scan results
+      - name: Upload scan log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scan-results-${{ github.run_number }}
-          path: |
-            *.log
+          name: scan-log-${{ github.run_number }}
+          path: "*.log"
           if-no-files-found: ignore
           retention-days: 7
