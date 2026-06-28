@@ -4,7 +4,7 @@ import asyncio
 import logging
 import pytz
 import pandas as pd
-import pandas_ta as ta
+import ta
 from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -22,13 +22,6 @@ PRIORITY_SYMBOLS = [
     "CII","DPG","IJC","SZC","PLC","SHB","NVB","IDC","VGS","PAN",
     "HAG","HNG","BAF","MSB","PHR","GVR","BCM","SAB","VPG","SIP",
 ]
-
-def is_market_open():
-    now = datetime.now(VN_TZ)
-    if now.weekday() >= 5:
-        return False
-    h, m = now.hour, now.minute
-    return (9, 0) <= (h, m) <= (15, 5)
 
 def get_all_symbols():
     use_priority = os.getenv("USE_PRIORITY_ONLY", "false").lower() == "true"
@@ -59,14 +52,22 @@ def fetch_ohlcv_1h(symbol):
         df = df.sort_values('time').reset_index(drop=True)
         return df
     except Exception as e:
-        logger.debug(f"Error fetching {symbol}: {e}")
+        logger.debug(f"Error {symbol}: {e}")
         return None
 
 def compute_indicators(df):
     df = df.copy()
-    df['rsi'] = ta.rsi(df['close'], length=14)
-    df['rsi_ema9'] = ta.ema(df['rsi'], length=9)
-    df['rsi_wma45'] = ta.wma(df['rsi'], length=45)
+    close = df['close']
+    # RSI(14) dung thu vien ta
+    df['rsi'] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
+    # EMA9 cua RSI
+    df['rsi_ema9'] = ta.trend.EMAIndicator(close=df['rsi'], window=9).ema_indicator()
+    # WMA45 cua RSI - tinh tay vi ta khong co WMA
+    weights = list(range(1, 46))
+    w_sum = sum(weights)
+    df['rsi_wma45'] = df['rsi'].rolling(window=45).apply(
+        lambda x: sum(w * v for w, v in zip(weights, x)) / w_sum, raw=True
+    )
     return df.dropna()
 
 def detect_signal(df):
@@ -106,7 +107,7 @@ def scan_market():
                     sig['detected_at'] = datetime.now(VN_TZ).isoformat()
                     results.append(sig)
                     logger.info(f"  SIGNAL [{i}/{total}] {symbol} RSI={sig['rsi']}")
-            if i % 50 == 0:
+            if i % 20 == 0:
                 logger.info(f"  Progress: {i}/{total} ({round(i/total*100)}%)")
             time.sleep(delay)
         except Exception as e:
@@ -118,20 +119,20 @@ async def send_telegram(signals):
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
-        logger.warning("Telegram not configured. Skipping.")
+        logger.warning("Telegram not configured.")
         return
     try:
         import telegram
         bot = telegram.Bot(token=token)
         now = datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')
         if not signals:
-            msg = f"✅ RSI Scan xong luc {now}\nKhong co tin hieu moi."
+            msg = f"RSI Scan xong luc {now}. Khong co tin hieu moi."
         else:
-            lines = [f"🚨 RSI Cat len EMA9+WMA45 - 1H", f"⏰ {now} | {len(signals)} ma\n"]
-            for s in signals[:20]:
-                lines.append(f"• {s['symbol']} RSI={s['rsi']} EMA9={s['rsi_ema9']} WMA45={s['rsi_wma45']}")
-            if len(signals) > 20:
-                lines.append(f"...va {len(signals)-20} ma khac")
+            lines = [f"RSI Cat len EMA9+WMA45 khung 1H", f"Thoi gian: {now} | {len(signals)} ma", ""]
+            for s in signals[:25]:
+                lines.append(f"{s['symbol']} | RSI={s['rsi']} EMA9={s['rsi_ema9']} WMA45={s['rsi_wma45']}")
+            if len(signals) > 25:
+                lines.append(f"...va {len(signals)-25} ma khac")
             msg = "\n".join(lines)
         await bot.send_message(chat_id=chat_id, text=msg)
         logger.info("Telegram sent OK")
@@ -145,11 +146,11 @@ def main():
     logger.info("=" * 50)
     signals = scan_market()
     if signals:
-        logger.info(f"\nRESULT - {len(signals)} SIGNALS:")
+        logger.info(f"RESULT - {len(signals)} SIGNALS:")
         for s in signals:
             logger.info(f"  {s['symbol']:6s} RSI={s['rsi']:5.1f} EMA9={s['rsi_ema9']:5.1f} WMA45={s['rsi_wma45']:5.1f} Price={s['close']:,.0f}")
     else:
-        logger.info("No signals found in this scan.")
+        logger.info("No signals found.")
     asyncio.run(send_telegram(signals))
     logger.info("Done.")
 
