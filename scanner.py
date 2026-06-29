@@ -3,7 +3,7 @@ import time
 import asyncio
 import logging
 import pytz
-import pandas as pd
+import pandas as pdh
 import ta
 from datetime import datetime, timedelta
 
@@ -82,25 +82,28 @@ def compute_indicators(df):
     return df.dropna()
 
 def detect_signal(df):
-    if len(df) < 3:
+    if len(df) < 4:
         return None
-    prev = df.iloc[-2]
     curr = df.iloc[-1]
-    above_both     = (curr['rsi'] > curr['rsi_ema9'] and curr['rsi'] > curr['rsi_wma45'])
-    below_any_prev = (prev['rsi'] <= prev['rsi_ema9'] or prev['rsi'] <= prev['rsi_wma45'])
-    if above_both and below_any_prev:
-        return {
-            'rsi':        round(float(curr['rsi']), 2),
-            'rsi_ema9':   round(float(curr['rsi_ema9']), 2),
-            'rsi_wma45':  round(float(curr['rsi_wma45']), 2),
-            'dist_ema9':  round(float(curr['rsi'] - curr['rsi_ema9']), 2),
-            'dist_wma45': round(float(curr['rsi'] - curr['rsi_wma45']), 2),
-            'close':  round(float(curr.get('close', 0)), 2),
-            'volume': int(curr.get('volume', 0)),
-            'candle_time': str(curr.get('time', '')),
-        }
+    above_both = (curr['rsi'] > curr['rsi_ema9'] and curr['rsi'] > curr['rsi_wma45'])
+    if not above_both:
+        return None
+    # Nhin lai toi da 3 nen de bat tin hieu RSI vua cat len EMA9 va WMA45
+    for lookback in [2, 3, 4]:
+        prev = df.iloc[-lookback]
+        below_any_prev = (prev['rsi'] <= prev['rsi_ema9'] or prev['rsi'] <= prev['rsi_wma45'])
+        if below_any_prev:
+            return {
+                'rsi':        round(float(curr['rsi']), 2),
+                'rsi_ema9':   round(float(curr['rsi_ema9']), 2),
+                'rsi_wma45':  round(float(curr['rsi_wma45']), 2),
+                'dist_ema9':  round(float(curr['rsi'] - curr['rsi_ema9']), 2),
+                'dist_wma45': round(float(curr['rsi'] - curr['rsi_wma45']), 2),
+                'close':  round(float(curr.get('close', 0)), 2),
+                'volume': int(curr.get('volume', 0)),
+                'candle_time': str(curr.get('time', '')),
+            }
     return None
-
 def scan_market():
     symbols = get_symbols_hose_hnx()
     results = []
