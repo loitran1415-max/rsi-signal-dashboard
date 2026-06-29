@@ -13,3 +13,4 @@ plotly>=5.0.0
 scipy>=1.10.0
 numpy>=1.24.0
 openpyxl>=3.1.0
+vnstock-ezchart>=0.1.0
