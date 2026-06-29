@@ -61,14 +61,14 @@ def fetch_ohlcv_1h(symbol):
         stock = Vnstock().stock(symbol=symbol, source='TCBS')
         df = stock.quote.history(start=start_date, end=end_date, interval='1H')
         if df is None or len(df) < 60:
+            logger.warning(f'[SKIP] {symbol}: df=None hoac it hon 60 nen (co {len(df) if df is not None else 0} nen)')
             return None
         df.columns = [c.lower() for c in df.columns]
         df = df.sort_values('time').reset_index(drop=True)
         return df
     except Exception as e:
-        logger.debug(f'Error {symbol}: {e}')
+        logger.warning(f'[ERROR] {symbol}: {e}')
         return None
-
 def compute_indicators(df):
     df = df.copy()
     close = df['close']
